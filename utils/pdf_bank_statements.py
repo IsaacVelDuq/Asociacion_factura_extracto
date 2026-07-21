@@ -4,15 +4,18 @@ from itertools import zip_longest
 import pandas as pd
 import pdfplumber as plumb
 
+from logger_setup import get_logger
 
-class PDFMovimientosExtractor:
+
+class PDFMovementsExtractor:
     """
     Extrae la tabla de movimientos de un extracto PDF de tarjeta de crédito.
 
     Uso
     ----
-    extractor = PDFMovimientosExtractor()
-    df = extractor.extraer(r"C:\\Extracto.pdf")
+    extractor = PDFMovementsExtractor()
+    df = extractor.extract_movements
+    (r"C:\\Extracto.pdf")
     """
 
     _PRIMARY_SETTINGS = {
@@ -46,17 +49,20 @@ class PDFMovimientosExtractor:
         },
     ]
 
-    _MOVIMIENTOS_REQUIRED_KEYWORDS = [
+    _MOVEMENTS_REQUIRED_KEYWORDS = [
         "fecha",
         "descripci",
         "saldo",
     ]
 
-    _MOVIMIENTOS_REJECT_KEYWORDS = [
+    _MOVEMENTS_REJECT_KEYWORDS = [
         "cheque",
         "cod. banco",
         "cod banco",
     ]
+
+    def __init__(self) -> None:
+        self.logger = get_logger(self.__class__.__name__)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -92,6 +98,7 @@ class PDFMovimientosExtractor:
     def _adjust_cells(self, df):
 
         if ("Descripción" not in df.columns) or ("to Fecha" not in df.columns):
+            self.logger.debug("_adjust_cells: columnas necesarias no presentes, se retorna sin cambios.")
             return df
 
         def adjust_string(texto, caracter):
@@ -195,7 +202,7 @@ class PDFMovimientosExtractor:
     # Validación de tablas
     # ------------------------------------------------------------------
 
-    def _is_movimientos_table(self, table):
+    def _is_movements_table(self, table):
 
         if not table:
             return False
@@ -205,23 +212,24 @@ class PDFMovimientosExtractor:
             for h in table[0]
         )
 
-        for keyword in self._MOVIMIENTOS_REJECT_KEYWORDS:
+        for keyword in self._MOVEMENTS_REJECT_KEYWORDS:
 
             if keyword in headers:
                 return False
 
-        for keyword in self._MOVIMIENTOS_REQUIRED_KEYWORDS:
+        for keyword in self._MOVEMENTS_REQUIRED_KEYWORDS:
 
             if keyword not in headers:
                 return False
 
+        self.logger.debug("_is_movements_table: cabeceras válidas detectadas.")
         return True
     
         # ------------------------------------------------------------------
     # Reparación de tablas de 9 columnas
     # ------------------------------------------------------------------
 
-    def _detect_missing_col(self, headers):
+    def _detect_missing_column(self, headers):
         """
         Determina dónde insertar la columna faltante cuando pdfplumber
         devuelve una tabla de 9 columnas.
@@ -247,17 +255,22 @@ class PDFMovimientosExtractor:
 
         return 4
 
-    def _repair_9col_table(self, table):
+    def _repair_9_col_table(self, table):
 
         if not table or len(table[0]) != 9:
             return table
+
+        self.logger.debug(
+            "_repair_9_col_table: reparando tabla de 9 columnas (insert_pos=%s).",
+            self._detect_missing_column([str(h or "").strip() for h in table[0]]),
+        )
 
         headers = [
             str(h or "").strip()
             for h in table[0]
         ]
 
-        insert_pos = self._detect_missing_col(headers)
+        insert_pos = self._detect_missing_column(headers)
 
         repaired = []
 
@@ -321,13 +334,14 @@ class PDFMovimientosExtractor:
                 errors="coerce",
             )
 
+        self.logger.debug("_parse: conversión numérica completada para %d columnas.", len(numeric_cols))
         return df
 
     # ------------------------------------------------------------------
     # Extracción principal
     # ------------------------------------------------------------------
 
-    def extraer(self, pdf_path: str) -> pd.DataFrame:
+    def extract_movements(self, pdf_path: str) -> pd.DataFrame:
         """
         Extrae la tabla de movimientos del PDF.
 
@@ -355,11 +369,15 @@ class PDFMovimientosExtractor:
 
         with plumb.open(pdf_path) as pdf:
 
-            for page in pdf.pages:
+            total_pages = len(pdf.pages)
+            self.logger.info("Abriendo PDF '%s' con %d página(s) para extraer MOVIMIENTOS.", pdf_path, total_pages)
+
+            for page_num, page in enumerate(pdf.pages, start=1):
 
                 text = page.extract_text() or ""
 
                 if not pattern.search(text):
+                    self.logger.debug("Página %d: no contiene sección 'MOVIMIENTOS'.", page_num)
                     continue
 
                 best_tables = None
@@ -378,12 +396,20 @@ class PDFMovimientosExtractor:
                         for table in tables
                         if len(table) > 3
                         and len(table[0]) in (9, 10)
-                        and self._is_movimientos_table(table)
+                        and self._is_movements_table(table)
                     ]
 
                     has_10 = any(
                         len(table[0]) == 10
                         for table in candidates
+                    )
+
+                    self.logger.debug(
+                        "Página %d intento %d: %d tabla(s) candidatas encontradas (has_10=%s).",
+                        page_num,
+                        attempt,
+                        len(candidates),
+                        has_10,
                     )
 
                     if has_10:
@@ -395,8 +421,17 @@ class PDFMovimientosExtractor:
                         best_tables = candidates
                         used_attempt = attempt
 
+
                 if not best_tables:
+                    self.logger.debug("Página %d: no se encontraron tablas válidas con ninguna estrategia.", page_num)
                     continue
+
+                self.logger.info(
+                    "Página %d: %d tabla(s) seleccionadas por intento %d.",
+                    page_num,
+                    len(best_tables),
+                    used_attempt,
+                )
 
                 # ----------------------------------------------------------
                 # Procesar tablas encontradas
@@ -407,7 +442,7 @@ class PDFMovimientosExtractor:
                     ncols = len(table[0])
 
                     if ncols == 9:
-                        table = self._repair_9col_table(table)
+                        table = self._repair_9_col_table(table)
                         ncols = len(table[0])
 
                     if ncols != 10:
@@ -425,9 +460,57 @@ class PDFMovimientosExtractor:
         if not dfs:
             return pd.DataFrame()
 
-        resultado = pd.concat(
+        result = pd.concat(
             dfs,
             ignore_index=True,
         )
 
-        return resultado
+        return result
+    
+    def extract_period(self, pdf_path: str) -> str:
+        """
+        Extrae el período liquidado final del PDF.
+
+        Ejemplo:
+            Periodo liquidado JUN.08/26 - JUL.08/26
+            -> "JULIO -2026"
+        """
+
+        pattern = re.compile(
+            r"Periodo\s+liquidado\s+[A-Z]{3}\.\d{2}/\d{2}\s*-\s*([A-Z]{3})\.\d{2}/(\d{2})",
+            re.IGNORECASE,
+        )
+
+        month_map = {
+            "ENE": "ENERO",
+            "FEB": "FEBRERO",
+            "MAR": "MARZO",
+            "ABR": "ABRIL",
+            "MAY": "MAYO",
+            "JUN": "JUNIO",
+            "JUL": "JULIO",
+            "AGO": "AGOSTO",
+            "SEP": "SEPTIEMBRE",
+            "OCT": "OCTUBRE",
+            "NOV": "NOVIEMBRE",
+            "DIC": "DICIEMBRE",
+        }
+
+        with plumb.open(pdf_path) as pdf:
+            for page in pdf.pages:
+
+                text = page.extract_text() or ""
+
+                match = pattern.search(text)
+
+                if match:
+                    month_abbr = match.group(1).upper()  # JUL
+                    year_short = match.group(2)          # 26
+
+                    month_name = month_map.get(month_abbr)
+
+                    if month_name:
+                        self.logger.info("Período liquidado encontrado: %s -20%s", month_name, year_short)
+                        return f"{month_name}_20{year_short}"
+        self.logger.warning("No se encontró el período liquidado en el PDF '%s'.", pdf_path)            
+        return ""

@@ -22,6 +22,9 @@ tiene su propio GIL.
 """
 
 import multiprocessing
+import os
+
+os.environ["DISABLE_CONSOLE_LOGGING"] = "1"
 
 from core.execution_controller import ExecutionController
 from core.gui_logging import MSG_FINISHED, MSG_PAUSED, attach_gui_handler
@@ -56,7 +59,13 @@ def run_worker_process(
         logger.error("El proceso de scraping falló: %s", e)
         message_queue.put((MSG_FINISHED, False, str(e)))
         return
-    except Exception as e:
+    except BaseException as e:
+        # BaseException (no solo Exception) a propósito: así también se
+        # reporta a la GUI ante KeyboardInterrupt/SystemExit u otras
+        # señales que interrumpan el proceso, en vez de dejarlo morir en
+        # silencio. Un crash nativo real (segfault en una librería C) sigue
+        # sin poder capturarse aquí -- para eso existe el vigilante en
+        # gui/app.py que detecta cuando el proceso muere sin este mensaje.
         logger.exception("Error inesperado durante el scraping: %s", e)
         message_queue.put((MSG_FINISHED, False, str(e)))
         return

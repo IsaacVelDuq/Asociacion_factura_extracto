@@ -15,12 +15,12 @@ class ExcelFormatter:
     """
 
     def __init__(self):
-        self.fuente_italic = Font(italic=True)
-        self.fondo_amarillo = PatternFill(start_color="FFF9C4", end_color="FFF9C4", fill_type="solid")
-        self.fondo_azul_claro = PatternFill(start_color="D4E6F1", end_color="D4E6F1", fill_type="solid")  # Azul claro
-        self.alineacion_centro = Alignment(horizontal='center', vertical='center')
+        self.italic_font = Font(italic=True)
+        self.yellow_fill = PatternFill(start_color="FFF9C4", end_color="FFF9C4", fill_type="solid")
+        self.light_blue_fill = PatternFill(start_color="D4E6F1", end_color="D4E6F1", fill_type="solid")  # Azul claro
+        self.center_alignment = Alignment(horizontal='center', vertical='center')
 
-    def _limpiar_na(self, df):
+    def _clean_na(self, df):
         """
         Convierte pandas.NA a None para que sea compatible con openpyxl.
         """
@@ -29,7 +29,7 @@ class ExcelFormatter:
         df = df.replace({np.nan: None})
         return df
 
-    def _es_fila_subtotal_o_total(self, row, idx_descripcion):
+    def _is_subtotal_or_total_row(self, row, idx_descripcion):
         """
         Verifica si una fila es SUBTOTAL o TOTAL basado en la columna 'Descripción'.
         """
@@ -42,7 +42,7 @@ class ExcelFormatter:
             return False
         return str(valor).strip().upper() in ['SUBTOTAL', 'TOTAL']
 
-    def exportar(self, df, ruta_excel, nombre_hoja="Hoja1", mes="Mayo", numero_tarjeta="9944", horizontal=True):
+    def export(self, df, excel_path, sheet_name="Hoja1", period="", card_number="9944", horizontal=True):
         """
         Exporta DataFrame a Excel.
 
@@ -50,13 +50,13 @@ class ExcelFormatter:
         ----------
         df : pandas.DataFrame
             DataFrame con CUALQUIER estructura
-        ruta_excel : str
+        excel_path : str
             Ruta del archivo Excel
-        nombre_hoja : str
+        sheet_name : str
             Nombre de la hoja de Excel
-        mes : str
-            Nombre del mes para el encabezado
-        numero_tarjeta : str
+        period : str
+            Nombre del período para el encabezado
+        card_number : str
             Número de tarjeta para el encabezado
         horizontal : bool
             True: Tablas de 40 registros una al lado de la otra
@@ -70,37 +70,37 @@ class ExcelFormatter:
         
         # Validar que df tenga datos
         if df is None or df.empty:
-            logger.warning(f"⚠️ DataFrame '{nombre_hoja}' está vacío, no se exportará")
-            return ruta_excel
+            logger.warning(f"DataFrame '{sheet_name}' está vacío, no se exportará")
+            return excel_path
         
         # LIMPIAR: Convertir pandas.NA a None para openpyxl
-        df = self._limpiar_na(df)
+        df = self._clean_na(df)
         
         # Crear o cargar workbook
-        if os.path.exists(ruta_excel):
-            wb = openpyxl.load_workbook(ruta_excel)
+        if os.path.exists(excel_path):
+            wb = openpyxl.load_workbook(excel_path)
         else:
             wb = openpyxl.Workbook()
             wb.remove(wb.active)
         
         # Eliminar hoja si ya existe
-        if nombre_hoja in wb.sheetnames:
-            wb.remove(wb[nombre_hoja])
+        if sheet_name in wb.sheetnames:
+            wb.remove(wb[sheet_name])
         
         # Crear nueva hoja
-        ws = wb.create_sheet(nombre_hoja)
+        ws = wb.create_sheet(sheet_name)
         
         if horizontal:
-            self._escribir_tablas_horizontal(ws, df, mes, numero_tarjeta)
+            self._write_tables_horizontal(ws, df, period, card_number)
         else:
-            self._escribir_tabla_simple(ws, df)
+            self._write_simple_table(ws, df)
         
-        wb.save(ruta_excel)
-        logger.info(f"✅ Hoja '{nombre_hoja}' exportada con {len(df)} registros")
+        wb.save(excel_path)
+        logger.info(f"Hoja '{sheet_name}' exportada con {len(df)} registros")
         
-        return ruta_excel
+        return excel_path
 
-    def _escribir_tablas_horizontal(self, ws, df, mes, numero_tarjeta):
+    def _write_tables_horizontal(self, ws, df, period, card_number):
         """
         Escribe tablas de 40 registros una al lado de la otra.
         """
@@ -133,7 +133,7 @@ class ExcelFormatter:
             # ============================================================
             # 1. Encabezado de la tabla (fila 1)
             # ============================================================
-            encabezado = f"{numero_tarjeta} - {mes}"
+            encabezado = f"{card_number} - {period}"
             ws.merge_cells(
                 start_row=fila_actual, 
                 start_column=columna_actual,
@@ -157,22 +157,22 @@ class ExcelFormatter:
             # ============================================================
             for i, row in enumerate(tabla.itertuples(index=False), start=0):
                 fila_dato = fila_actual + 2 + i
-                
+
                 # Verificar si esta fila es SUBTOTAL o TOTAL
-                es_subtotal_total = self._es_fila_subtotal_o_total(row, idx_descripcion)
-                
+                es_subtotal_total = self._is_subtotal_or_total_row(row, idx_descripcion)
+
                 for j, valor in enumerate(row):
                     # Asegurar que el valor sea compatible con Excel
                     if pd.isna(valor) or valor is None:
                         valor = None
                     celda = ws.cell(row=fila_dato, column=columna_actual + j, value=valor)
-                    celda.font = self.fuente_italic
+                    celda.font = self.italic_font
                     
                     # ============================================================
                     # Si es SUBTOTAL o TOTAL → FONDO AZUL CLARO en TODA la fila
                     # ============================================================
                     if es_subtotal_total:
-                        celda.fill = self.fondo_azul_claro
+                        celda.fill = self.light_blue_fill
                 
                 # ============================================================
                 # Si la columna 'Factura' está vacía → FONDO AMARILLO en TODA la fila
@@ -183,7 +183,7 @@ class ExcelFormatter:
                     if pd.isna(valor_factura) or valor_factura == '' or str(valor_factura).strip() == '':
                         for k in range(num_columnas):
                             celda_fila = ws.cell(row=fila_dato, column=columna_actual + k)
-                            celda_fila.fill = self.fondo_amarillo
+                            celda_fila.fill = self.yellow_fill
             
             # ============================================================
             # 4. Ajustar ancho de columnas
@@ -203,7 +203,7 @@ class ExcelFormatter:
             # ============================================================
             columna_actual += num_columnas + espacio_columnas
 
-    def _escribir_tabla_simple(self, ws, df):
+    def _write_simple_table(self, ws, df):
         """
         Escribe una sola tabla con TODOS los registros del DataFrame.
         Sin colores, sin divisiones.
@@ -230,20 +230,20 @@ class ExcelFormatter:
             fila_dato = i + 2
             
             # Verificar si esta fila es SUBTOTAL o TOTAL
-            es_subtotal_total = self._es_fila_subtotal_o_total(row, idx_descripcion)
+            es_subtotal_total = self._is_subtotal_or_total_row(row, idx_descripcion)
             
             for j, valor in enumerate(row, start=1):
                 # Asegurar que el valor sea compatible con Excel
                 if pd.isna(valor) or valor is None:
                     valor = None
                 celda = ws.cell(row=fila_dato, column=j, value=valor)
-                celda.font = self.fuente_italic
+                celda.font = self.italic_font
                 
                 # ============================================================
                 # Si es SUBTOTAL o TOTAL → FONDO AZUL CLARO en TODA la fila
                 # ============================================================
                 if es_subtotal_total:
-                    celda.fill = self.fondo_azul_claro
+                    celda.fill = self.light_blue_fill
         
         # ============================================================
         # 3. Ajustar ancho de columnas

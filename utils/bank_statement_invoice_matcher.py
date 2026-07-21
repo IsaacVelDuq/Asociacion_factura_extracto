@@ -33,11 +33,11 @@ def parse_colombian_currency(raw_value) -> Optional[float]:
     if raw_value is None:
         return None
     if isinstance(raw_value, (int, float)):
-        return round(float(raw_value), 2)
+        return round(float(raw_value), 0)
 
     try:
         cleaned = str(raw_value).strip().replace(".", "").replace(",", ".")
-        return round(float(cleaned), 2)
+        return round(float(cleaned), 0)
     except (ValueError, AttributeError):
         return None
 

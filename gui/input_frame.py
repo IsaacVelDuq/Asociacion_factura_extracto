@@ -19,12 +19,14 @@ class InputFrame(ctk.CTkFrame):
         master,
         on_start: Callable[[], None],
         on_proceed: Callable[[], None],
+        on_stop: Callable[[], None],
         **kwargs,
     ) -> None:
         super().__init__(master, corner_radius=12, **kwargs)
 
         self._on_start = on_start
         self._on_proceed = on_proceed
+        self._on_stop = on_stop
 
         self.grid_columnconfigure(0, weight=1)
 
@@ -64,10 +66,8 @@ class InputFrame(ctk.CTkFrame):
         note = ctk.CTkLabel(
             self,
             text=(
-                "N.º de casos (Éxito/Aviatur), mes a reportar y nombre del "
-                "archivo de salida están quemados por ahora en core/worker.py. "
-                "El navegador siempre se abre visible (headless deshabilitado) "
-                "porque Cronos requiere resolver el captcha manualmente."
+                "Se buscarán los casos que tengan como proceedor (Éxito/Aviatur) "
+                "y que coincidan con los últimos 4 dígitos de la tarjeta."
             ),
             font=ctk.CTkFont(size=11),
             text_color="#7f849c",
@@ -93,6 +93,17 @@ class InputFrame(ctk.CTkFrame):
             state="disabled",
         )
         self.proceed_button.grid(row=row, column=0, sticky="ew", padx=16, pady=4)
+        row += 1
+
+        self.stop_button = ctk.CTkButton(
+            self,
+            text="Detener proceso",
+            command=self._handle_stop,
+            fg_color="#ef4444",
+            hover_color="#dc2626",
+            state="disabled",
+        )
+        self.stop_button.grid(row=row, column=0, sticky="ew", padx=16, pady=4)
         row += 1
 
         self.status_label = ctk.CTkLabel(
@@ -163,6 +174,9 @@ class InputFrame(ctk.CTkFrame):
     def _handle_proceed(self) -> None:
         self._on_proceed()
 
+    def _handle_stop(self) -> None:
+        self._on_stop()
+
     # ------------------------------------------------------------------
     # API pública usada por App
     # ------------------------------------------------------------------
@@ -176,10 +190,12 @@ class InputFrame(ctk.CTkFrame):
     def set_running_state(self) -> None:
         self.start_button.configure(state="disabled", text="Ejecutando...")
         self.proceed_button.configure(state="disabled")
+        self.stop_button.configure(state="normal")
         self.status_label.configure(text="Proceso en ejecución...")
 
     def set_waiting_for_login_state(self) -> None:
         self.proceed_button.configure(state="normal")
+        self.stop_button.configure(state="normal")
         self.status_label.configure(
             text="Inicia sesión manualmente en el navegador (captcha) "
             "y luego haz clic en 'Proceder'."
@@ -187,9 +203,11 @@ class InputFrame(ctk.CTkFrame):
 
     def set_resumed_state(self) -> None:
         self.proceed_button.configure(state="disabled")
+        self.stop_button.configure(state="normal")
         self.status_label.configure(text="Reanudado. Procesando...")
 
     def set_idle_state(self, message: str = "Listo para iniciar.") -> None:
         self.start_button.configure(state="normal", text="Iniciar proceso")
         self.proceed_button.configure(state="disabled")
+        self.stop_button.configure(state="disabled")
         self.status_label.configure(text=message)

@@ -12,6 +12,16 @@ import logging
 import queue
 from dataclasses import dataclass
 
+# Nombres de módulos que no deben salir a la GUI para no saturarla con
+# logs de bibliotecas internas (pdfminer, asyncio, etc.).
+_IGNORED_LOGGER_PREFIXES = (
+    "asyncio",
+    "pdfminer",
+    "PIL",
+    "urllib3",
+    "requests",
+)
+
 
 # Tipo de mensaje que viaja por la cola.
 MSG_LOG = "LOG"
@@ -49,6 +59,13 @@ class QueueLogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
+            logger_name = record.name or ""
+            if any(logger_name == name or logger_name.startswith(f"{name}.") for name in _IGNORED_LOGGER_PREFIXES):
+                return
+
+            if record.levelno < logging.INFO:
+                return
+
             message = self.format(record)
             self._queue.put((MSG_LOG, record.levelname, message))
         except Exception:

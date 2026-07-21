@@ -71,9 +71,13 @@ class BaseScraper:
             headless=self.headless,
             channel="chrome",
             slow_mo=self.slow_mo,
+            args=["--start-maximized"],
         )
 
-        self.context = self.browser.new_context()
+        self.context = self.browser.new_context(
+            no_viewport=True,
+        )
+
         self.page = self.context.new_page()
         self.page.set_default_timeout(self.timeout)
 

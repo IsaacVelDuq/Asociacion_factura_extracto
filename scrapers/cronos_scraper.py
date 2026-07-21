@@ -223,9 +223,7 @@ class CronosScraper(BaseScraper):
                 )
 
                 text = self.extract_document_text(document_index=0)
-                print(f"--- Factura {invoice} ---")
-                print(f"--- Fecha {invoice_date} ---")
-                print(text)
+                self.logger.debug("--- Factura %s (Fecha %s) ---\n%s", invoice, invoice_date, text)
                 self.invoices_data.append({"invoice": invoice, "date": invoice_date, "text": text, "supplier": supplier})
 
                 self.close_document_viewer()

@@ -17,12 +17,14 @@ Comunicación con el proceso hijo:
 """
 
 import multiprocessing
+import queue
 import tkinter.messagebox as messagebox
 
 import customtkinter as ctk
 
 from core.gui_logging import MSG_FINISHED, MSG_LOG, MSG_PAUSED
-from core.worker import ScraperParams
+from core.params import ScraperParams
+from core.process_lifecycle import shutdown_worker_process
 from core.worker_process import run_worker_process
 from gui.console_frame import ConsoleFrame
 from gui.input_frame import InputFrame
@@ -38,8 +40,8 @@ class App(ctk.CTk):
         super().__init__()
 
         self.title("GCO - Tesorería · Conciliación de tarjeta")
-        self.geometry("1180x680")
-        self.minsize(980, 600)
+        self.geometry("900x500")
+        self.minsize(900, 500)
 
         self.grid_columnconfigure(0, weight=0, minsize=340)
         self.grid_columnconfigure(1, weight=1)
@@ -49,12 +51,15 @@ class App(ctk.CTk):
         self._message_queue: "multiprocessing.Queue" = multiprocessing.Queue()
         self._resume_event = multiprocessing.Event()
         self._worker_process: "multiprocessing.Process | None" = None
+        self._awaiting_result = False  # True mientras hay un proceso corriendo
+        # y todavía no hemos recibido su mensaje MSG_FINISHED.
 
         # --- Paneles ---
         self.input_frame = InputFrame(
             self,
             on_start=self._handle_start_clicked,
             on_proceed=self._handle_proceed_clicked,
+            on_stop=self._handle_stop_clicked,
         )
         self.input_frame.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=12)
 
@@ -73,15 +78,22 @@ class App(ctk.CTk):
             return
 
         values = self.input_frame.get_values()
+        labels = {
+            "bank_statement_path": "Extracto bancario",
+            "output_dir": "Carpeta de salida",
+            "card_last_digits": "Últimos 4 dígitos de la tarjeta",
+        }
 
         missing = [
-            k
+            labels[k]
             for k in ("bank_statement_path", "output_dir", "card_last_digits")
             if not values[k]
         ]
+
         if missing:
             messagebox.showwarning(
-                "Faltan datos", f"Completa los siguientes campos: {', '.join(missing)}"
+                "Faltan datos",
+                f"Completa los siguientes campos:\n\n• " + "\n• ".join(missing),
             )
             return
 
@@ -94,6 +106,7 @@ class App(ctk.CTk):
         self._resume_event.clear()
         self.console_frame.clear()
         self.input_frame.set_running_state()
+        self._awaiting_result = True
 
         # Se ejecuta en un PROCESO aparte (no un hilo): así el trabajo de
         # Playwright/pandas nunca compite por el GIL con la GUI.
@@ -108,12 +121,21 @@ class App(ctk.CTk):
     def _handle_proceed_clicked(self) -> None:
         self.input_frame.set_resumed_state()
         self._resume_event.set()
+        self._awaiting_result = True
+
+    def _handle_stop_clicked(self) -> None:
+        if self._worker_process is None or not self._worker_process.is_alive():
+            self.input_frame.set_idle_state("No hay un proceso en ejecución.")
+            return
+
+        self.input_frame.set_idle_state("Deteniendo proceso...")
+        shutdown_worker_process(self._worker_process)
+        self._worker_process = None
+        self._awaiting_result = False
+        messagebox.showinfo("Proceso detenido", "El scraping se detuvo correctamente.")
 
     def _handle_close(self) -> None:
-        if self._worker_process is not None and self._worker_process.is_alive():
-            # Al ser un proceso real (no un hilo), sí se puede terminar de
-            # forma forzosa sin dejar nada colgado.
-            self._worker_process.terminate()
+        shutdown_worker_process(self._worker_process)
         self.destroy()
 
     # ------------------------------------------------------------------
@@ -134,6 +156,7 @@ class App(ctk.CTk):
 
                 elif kind == MSG_FINISHED:
                     _, success, message = item
+                    self._awaiting_result = False
                     self.input_frame.set_idle_state(
                         "Proceso finalizado." if success else "Proceso con errores."
                     )
@@ -142,9 +165,37 @@ class App(ctk.CTk):
                     else:
                         messagebox.showerror("Error en el proceso", message)
 
-        except Exception:
-            # multiprocessing.Queue.get_nowait() lanza queue.Empty (que
-            # hereda de Exception) cuando no hay mensajes pendientes.
+        except queue.Empty:
             pass
-        finally:
-            self.after(POLL_INTERVAL_MS, self._poll_queue)
+        except Exception as e:
+            # Un error real al pintar un log (ej. un carácter que rompe el
+            # Textbox) NO debe tragarse en silencio: lo mandamos a stderr
+            # para poder diagnosticarlo, pero seguimos vivos.
+            print(f"[GUI] Error inesperado procesando la cola de mensajes: {e}")
+
+        # --- Vigilante: ¿el proceso hijo murió sin avisar? ---
+        # Si estábamos esperando su resultado y el proceso ya no está vivo,
+        # pero nunca llegó un mensaje MSG_FINISHED, es que se cayó de forma
+        # anómala (crash nativo de Playwright/PyMuPDF, el navegador se
+        # cerró, lo mató el antivirus, etc.). Sin este chequeo, la interfaz
+        # se queda "congelada" para siempre: el botón sigue en "Ejecutando..."
+        # y no hay ningún mensaje de error.
+        if (
+            self._awaiting_result
+            and self._worker_process is not None
+            and not self._worker_process.is_alive()
+        ):
+            self._awaiting_result = False
+            exit_code = self._worker_process.exitcode
+            self.input_frame.set_idle_state("El proceso se interrumpió inesperadamente.")
+            messagebox.showerror(
+                "Proceso interrumpido",
+                "El proceso de scraping se cerró de forma inesperada "
+                f"(código de salida: {exit_code}), sin reportar un error "
+                "específico.\n\nEsto suele deberse a un cierre abrupto del "
+                "navegador o un crash nativo al procesar un PDF puntual. "
+                "Revisa logs/cronos_scraper.log para ver en qué punto exacto "
+                "se detuvo.",
+            )
+
+        self.after(POLL_INTERVAL_MS, self._poll_queue)
